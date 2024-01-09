@@ -1,10 +1,9 @@
-import json
-import os
-import librosa
-import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import librosa as sf
+import numpy as np
+import librosa
+import json
+import os
 
 
 def pad_or_truncate_features(features, max_length):
@@ -139,7 +138,7 @@ def convert_audio_to_wav(file_paths, output_dir="dj_wav"):
             )
 
             # Save the audio as a WAV file
-            sf.write(filename, y, sr)
+            librosa.write(filename, y, sr)
 
             # Print a message indicating the conversion
             print(f"Converted {file_path} to {filename}")
@@ -169,3 +168,55 @@ def convert_audio_to_wav(file_paths, output_dir="dj_wav"):
 
     for file_path in file_paths:
         process_audio(file_path)
+
+
+class Song:
+    def __init__(self, filepath=None):
+        self.filepath = filepath
+        self.audio = None
+        self.sample_rate = 44100
+        self.beats = None
+        self.downbeats = None
+
+        if filepath is not None:
+            self.song_name, self.song_format = self.get_song_name_and_format()
+            self.load_song_audio()
+            self.load_beats()
+
+    def plot_downbeats(self, start_dbeat, end_dbeat, plot_name="", color="red"):
+        plt.rcParams["figure.figsize"] = (20, 9)
+        dbeats = self.get_downbeats()
+        start_idx, end_idx = int(dbeats[start_dbeat]), int(dbeats[end_dbeat])
+        selected_dbeats = dbeats[start_dbeat : end_dbeat + 1] - start_idx
+        plt.plot(self.audio[start_idx:end_idx])
+        for dbeat in selected_dbeats:
+            plt.axvline(dbeat, color=color)
+        plt.title(plot_name)
+        plotname = "".join(plot_name.split(" "))
+        plt.savefig(f"{plotname}.png")
+
+    def load_song_audio(self):
+        self.audio, self.sample_rate = librosa.load(self.filepath, sr=self.sample_rate)
+
+    def get_song_name_and_format(self):
+        return os.path.basename(self.filepath).split(".")
+
+    def annotate_beats(self, output_filepath):
+        tempo, beats = librosa.beat.beat_track(y=self.audio, sr=self.sample_rate)
+        np.savetxt(output_filepath, beats, newline="\n")
+        return beats
+
+    def get_downbeats(self):
+        if self.downbeats is not None:
+            return self.downbeats
+
+        # Implement a basic downbeat detection algorithm or use beats directly
+        # This is a placeholder and should be replaced with a more robust method
+        dbeats = self.beats[
+            ::4
+        ]  # Assuming 4/4 time, take every fourth beat as a downbeat
+        dbeats_time_to_audio_index = np.array(dbeats, dtype=float) * self.sample_rate
+        self.downbeats = np.array(dbeats_time_to_audio_index, dtype=int)
+        return self.downbeats
+
+    

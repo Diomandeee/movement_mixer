@@ -1,14 +1,14 @@
-from typing import List, Dict, Any, Optional, Tuple
-from pydub import AudioSegment
+from typing import Dict, Any, Optional, List, Tuple
 from pydub.silence import split_on_silence
-from pydub.utils import mediainfo
+from pydub import AudioSegment
 from openai import OpenAI
 from pathlib import Path
-import datetime
+from tqdm import tqdm
+import pandas as pd
 import subprocess
 import scrapetube
+import datetime
 import argparse
-import pandas as pd
 import re
 import os
 
@@ -179,64 +179,124 @@ class Transcriber:
             print(f"Error during transcription: {e}")
             return {}
 
+    def _run_yt_dlp_with_progress(self, cmd: list, description: str) -> int:
+        """
+        Helper function to run yt-dlp command with tqdm progress bar.
+
+        Parameters:
+        - cmd (list): Command and its arguments for yt-dlp.
+        - description (str): Description for the tqdm progress bar.
+
+        Returns:
+        - int: Return code of the subprocess.
+        """
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        ) as process, tqdm(total=100, unit="%", desc=description, leave=False) as pbar:
+            for line in process.stdout:
+                print(line, end="")
+                if "download" in line.lower():
+                    percentage = re.findall(r"\d+\.\d+%", line)
+                    if percentage:
+                        progress = float(percentage[0].replace("%", ""))
+                        pbar.n = progress
+                        pbar.refresh()
+        return process.returncode
+
+    def download_youtube_audio(
+        self, youtube_url: str, output_path: str, custom_format: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Downloads audio from a YouTube video using yt-dlp with tqdm progress bar.
+        """
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+        format_selector = (custom_format if custom_format else "bestaudio[ext=m4a]",)
+
+        cmd = [
+            "yt-dlp",
+            "-f",
+            format_selector,
+            "-o",
+            os.path.join(output_path, "%(title)s.%(ext)s"),
+            "--newline",
+            youtube_url,
+        ]
+
+        if self._run_yt_dlp_with_progress(cmd, "Downloading Audio") == 0:
+            file_path = os.path.join(
+                output_path, "downloaded_audio.m4a"
+            )  # Modify as needed
+            print("Downloaded audio path:", file_path)
+            return file_path
+        return None
+
+    def download_youtube_video(
+        self, youtube_url: str, output_path: str, custom_format: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Downloads video from a YouTube video using yt-dlp and converts it to a QuickTime compatible format.
+        """
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+        format_selector = custom_format if custom_format else "best"
+        cmd = [
+            "yt-dlp",
+            "-f",
+            format_selector,
+            "-o",
+            os.path.join(output_path, "%(title)s.%(ext)s"),
+            youtube_url,
+        ]
+
+        if self._run_yt_dlp_with_progress(cmd, "Downloading Video") == 0:
+            file_path = os.path.join(
+                output_path, f"{os.path.basename(youtube_url)}.mp4"
+            )
+            print("Downloaded video path:", file_path)
+
+            # Convert the video to a QuickTime compatible format using ffmpeg (if needed)
+            return file_path
+        return None
+
     def download_youtube_media(
         self,
         youtube_url: str,
         output_path: str,
         media_type: str = "audio",
+        custom_format: Optional[str] = None,
     ) -> Optional[str]:
         """
         Downloads audio or video from a YouTube video using yt-dlp.
 
         Parameters:
         - youtube_url (str): URL of the YouTube video.
-        - output_path (str): Path to save the downloaded audio or video.
+        - output_path (str): Path to save the downloaded audio or video file.
         - media_type (str): Type of media to download, can be 'audio' or 'video'.
-        - custom_format (str, optional): Custom format selector for yt-dlp (default=None).
+        - custom_format (str, optional): Custom format to download the media in.
 
         Returns:
-        - Optional[str]: Name of the downloaded file or None if unsuccessful.
+        - Optional[str]: Path to the downloaded audio or video file or None if unsuccessful.
         """
-        # Define default format selectors for yt-dlp
-        format_selector = {
-            "audio": "bestaudio[ext=m4a]",
-            "video": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-        }
-
-        # Create the output directory if it doesn't exist
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-
-        # Command setup for yt-dlp
-        cmd = [
-            "yt-dlp",
-            "-f",
-            format_selector[media_type],  # Format selector based on media type
-            "-o",
-            os.path.join(output_path, "%(title)s.%(ext)s"),  # Output template
-            youtube_url,
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        if media_type == "audio":
+            return self.download_youtube_audio(
+                youtube_url, output_path, custom_format=custom_format
             )
-            output = result.stdout.decode("utf-8").strip()
-            if result.returncode == 0:
-                # Assuming the output filename is in the last line of stdout (depends on yt-dlp version)
-                file_path = output.split("\n")[-1]
-                print("Downloaded file path:", file_path)  # Debugging line
-                return file_path
-            else:
-                print("yt-dlp command was not successful.")  # Debugging line
-                print("Return code:", result.returncode)  # Debugging line
-                print("Output:", output)  # Debugging line
-                return None
-        except subprocess.CalledProcessError as e:
-            print("An exception occurred while running yt-dlp.")  # Debugging line
-            print("Error output:", e.output.decode("utf-8"))  # Debugging line
-            print("Error code:", e.returncode)  # Debugging line
-            return None
+        elif media_type == "video":
+            return self.download_youtube_video(
+                youtube_url, output_path, custom_format=custom_format
+            )
+        else:
+            raise ValueError(
+                f"Unsupported media type: {media_type}. Supported types are: audio, video"
+            )
 
     def download_multiple_youtube_media(
         self,
@@ -313,18 +373,7 @@ class Transcriber:
         convert_from_mp4: bool = False,
     ) -> pd.DataFrame:
         """
-        Manages the transcription process and returns results as a DataFrame.
-
-        Parameters:
-        - input_file (str): Path to the input audio file.
-        - output_file (str): Path to save the transcriptions.
-        - audio_format (str): Format of the input audio file.
-        - save_to_csv (bool): Whether to save the results to a CSV file.
-        - use_preprocessing (bool): Whether to preprocess the audio before transcription.
-        - convert_from_mp4 (bool): Whether to convert the input from MP4 to M4A before transcription.
-
-        Returns:
-        - pd.DataFrame: Transcription results.
+        Manages the transcription process and returns results as a DataFrame, with each sentence as a new row.
         """
         if convert_from_mp4:
             m4a_file = os.path.splitext(input_file)[0] + ".m4a"
@@ -338,18 +387,91 @@ class Transcriber:
             self.preprocess_audio(input_file, output_file, audio_format=audio_format)
             audio_file_to_transcribe = output_file
 
-        output = self.transcribe_audio(audio_file_to_transcribe)
+        transcription_result = self.transcribe_audio(audio_file_to_transcribe)
         t2 = datetime.datetime.now()
 
-        output_df = pd.DataFrame([output])
-        output_df["Start_Time"] = t1
-        output_df["End_Time"] = t2
-        output_df["Duration"] = (t2 - t1).total_seconds()
+        # Check if the result is a string or a dict with a 'transcript' key
+        if isinstance(transcription_result, str):
+            transcript = transcription_result
+        elif "transcript" in transcription_result and isinstance(
+            transcription_result["transcript"], str
+        ):
+            transcript = transcription_result["transcript"]
+        else:
+            print("Unexpected format in transcription result:", transcription_result)
+            return pd.DataFrame()  # Return an empty DataFrame or handle as appropriate
+
+        sentences = transcript.split(". ")
+        data = {
+            "Sentence": sentences,
+            "Start_Time": [t1] * len(sentences),
+            "End_Time": [t2] * len(sentences),
+            "Duration": [(t2 - t1).total_seconds()] * len(sentences),
+        }
+
+        output_df = pd.DataFrame(data)
 
         if save_to_csv:
             output_df.to_csv(output_file, index=False)
 
         return output_df
+
+    def extract_audio_from_video(self, video_file: str, output_file: str) -> None:
+        """
+        Extracts audio from a video file using ffmpeg.
+
+        Parameters:
+        - video_file (str): Path to the video file to extract audio from.
+        - output_file (str): Path to save the extracted audio file.
+        """
+        try:
+            command = [
+                "ffmpeg",
+                "-i",
+                video_file,
+                "-ab",
+                "160k",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                "-vn",
+                output_file,
+            ]
+            subprocess.run(command, check=True)
+        except Exception as e:
+            print(f"Error extracting audio from video: {e}")
+            return None
+
+    def transcribe_video(
+        self,
+        video_file: str,
+        output_file: str,
+        save_to_csv: bool = False,
+        use_preprocessing: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Manages the transcription of video by first extracting audio and then transcribing it.
+
+        Parameters:
+        - video_file (str): Path to the video file to transcribe.
+        - output_file (str): Path to save the transcriptions.
+        - save_to_csv (bool): Whether to save the results to a CSV file.
+        - use_preprocessing (bool): Whether to preprocess the audio before transcription.
+
+        Returns:
+        - pd.DataFrame: Transcription results.
+        """
+        audio_file_path = os.path.splitext(video_file)[0] + ".wav"
+        self.extract_audio_from_video(video_file, audio_file_path)
+
+        return self.transcribe(
+            audio_file_path,
+            output_file,
+            audio_format="wav",
+            save_to_csv=save_to_csv,
+            use_preprocessing=use_preprocessing,
+        )
 
     def transcribe_batch(
         self,
@@ -389,49 +511,11 @@ class Transcriber:
             print(f"Saved batch transcriptions to: {result_csv_path}")
         return result_df
 
-    def extract_audio_from_video(self, video_file: str, output_audio_file: str) -> None:
-        """
-        Extracts audio from the video and saves it as a new file.
-
-        Parameters:
-        - video_file (str): Path to the video file.
-        - output_audio_file (str): Path to save the extracted audio.
-        """
-        video = AudioSegment.from_file(video_file, format=mediainfo(video_file))
-        video.export(output_audio_file, format="wav")
-
-    def transcribe_video(
-        self,
-        video_file: str,
-        output_file: str,
-        save_to_csv: bool = False,
-        use_preprocessing: bool = False,
-    ) -> pd.DataFrame:
-        """
-        Manages the transcription of video by first extracting audio and then transcribing it.
-
-        Parameters:
-        - video_file (str): Path to the video file to transcribe.
-        - output_file (str): Path to save the transcriptions.
-        - save_to_csv (bool): Whether to save the results to a CSV file.
-        - use_preprocessing (bool): Whether to preprocess the audio before transcription.
-
-        Returns:
-        - pd.DataFrame: Transcription results.
-        """
-        audio_file_path = video_file + "_audio.wav"
-        self.extract_audio_from_video(video_file, audio_file_path)
-        return self.transcribe(
-            audio_file_path,
-            output_file,
-            audio_format="wav",
-            save_to_csv=save_to_csv,
-            use_preprocessing=use_preprocessing,
-        )
-
 
 def main():
-    parser = argparse.ArgumentParser(description="Download media from YouTube.")
+    parser = argparse.ArgumentParser(
+        description="Download and optionally transcribe media from YouTube."
+    )
     parser.add_argument(
         "youtube_url", type=str, help="The YouTube URL to download from."
     )
@@ -439,38 +523,47 @@ def main():
         "output_path", type=str, help="The directory to save the downloaded media."
     )
     parser.add_argument(
-        "--media_type",
-        type=str,
-        default="audio",
-        choices=["audio", "video"],
-        help="The type of media to download, audio or video.",
+        "media_type", type=str, help="The type of media to download, audio or video."
     )
 
+    parser.add_argument(
+        "--api_key",
+        type=str,
+        default=None,
+        help="OpenAI API key.",
+    )
+    parser.add_argument(
+        "--transcribe",
+        action="store_true",
+        help="Whether to transcribe the downloaded media.",
+    )
     args = parser.parse_args()
 
     # Initialize the Transcriber
-    transcriber = Transcriber()
+    transcriber = Transcriber(api_key=args.api_key)
 
     # Run the download_youtube_media method
+    file_path = None
     try:
-        file_path = transcriber.download_youtube_media(
-            args.youtube_url, args.output_path, args.media_type
+        transcriber.download_youtube_media(
+            args.youtube_url, args.output_path, media_type=args.media_type
         )
         if file_path:
-            print(f"Download successful. File saved to: {file_path}")
+            print("Downloaded file path:", file_path)
         else:
-            print("Download failed.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+            print("Download failed or no file was downloaded.")
+    except ValueError as ve:
+        print(f"Failed to download {args.youtube_url}: {ve}")
+
+    # Run the transcribe_video method only if file_path is not None
+    if args.transcribe and file_path:
+        try:
+            output_file = os.path.join(args.output_path, "transcription.csv")
+            transcriber.transcribe_video(file_path, output_file, save_to_csv=True)
+            print(f"Transcription saved to: {output_file}")
+        except Exception as e:
+            print(f"An error occurred during transcription: {e}")
 
 
 if __name__ == "__main__":
     main()
-
-# (.venve) (base) mohameddiomande@Mohameds-Air-2 movement_mixer % python audio.py
-# "https://www.youtube.com/watch?v=wm_B2-V-S_0&list=PLIxQjHO1yTm99RG32st06TnxZHMgCbT4H" "/Users/mohameddiomande/Desktop/storage/dj/realease"
-# "https://www.youtube.com/watch?v=P2WZx5LqZLQ&list=PLAFB_cBaNnFWQQHICZONgNGVJDmEfGGWf" "/Users/mohameddiomande/Desktop/storage/dj/realease"
-
-# create a pip freeze file
-# pip freeze > requirements.txt
-# source .venv/bin/activate

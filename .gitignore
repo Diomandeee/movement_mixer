@@ -53,3 +53,12 @@ Thumbs.db
 
 data/
 
+
+*.pyc
+pycrossfade_annotations/
+.vscode/
+Dockerfile
+docker-compose.yml
+main.py
+multiple_song_mix.wav
+output_multiple.wav
