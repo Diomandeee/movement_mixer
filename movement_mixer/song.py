@@ -1,8 +1,11 @@
+from typing import  List
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import argparse
 import librosa
 import json
+import glob
 import os
 
 
@@ -26,9 +29,18 @@ def load_features_from_json(json_file):
     with open(json_file, "r") as json_input:
         return json.load(json_input)
 
+def get_files(directory: str, patterns: List[str]) -> List[str]:
+    files = []
+    for pattern in patterns:
+        full_pattern = os.path.join(directory, pattern)
+        files.extend(glob.glob(full_pattern, recursive=True))
+    return files
+
+ 
 
 def convert_audio_to_images(
-    file_paths,
+    input_dir,
+    file_patterns= ["*.m4a"],
     output_dir="dj_spectrograms",
     figure_size=(6, 4),
     dpi=300,
@@ -36,6 +48,8 @@ def convert_audio_to_images(
 ):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    file_paths = get_files(directory=input_dir, patterns=file_patterns)
 
     for file_path in file_paths:
 
@@ -169,7 +183,6 @@ def convert_audio_to_wav(file_paths, output_dir="dj_wav"):
     for file_path in file_paths:
         process_audio(file_path)
 
-
 class Song:
     def __init__(self, filepath=None):
         self.filepath = filepath
@@ -219,4 +232,25 @@ class Song:
         self.downbeats = np.array(dbeats_time_to_audio_index, dtype=int)
         return self.downbeats
 
+
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Convert Audio to Image."
+    )
+    parser.add_argument(
+        "input_dir", type=str, help="The YouTube URL to download from."
+    )
     
+    parser.add_argument(
+        "output_dir", help="The directory to save the downloaded media."
+    )
+
+    args = parser.parse_args()
+
+    convert_audio_to_images(input_dir=args.input_dir, output_dir=args.output_dir)
+
+
+if __name__ == "__main__":
+    main()
